@@ -7,10 +7,31 @@ from ParetoDiscrete import ParetoDiscrete
 import numpy as np
 from scipy.sparse.linalg import spsolve
 from scipy import sparse
+from scipy.optimize import fsolve
+from scipy.optimize import bisect
 
 class Buera(object):
     
     def __init__(self, alpha, theta, kappa_s, kappa_m, delta, gamma, eta, rho, sigma, epsilon, psi, phi, upperA, nA, nZ, pgrid):
+        """
+        Class constructor:
+                 alpha,      #Elasticity of output with respect to capital
+                 theta,      #Elasticity of output with respect to labor
+                 kappa_s,    #Fixed cost in service sector
+                 kappa_m,    #Fixed cost in manufacturing sector
+                 delta,      #Depreciation rate
+                 gamma,      #One minus the hazard rate
+                 eta,        #Tail parameter of Pareto
+                 rho,        #Subjective discount factor (beta = 1-rho)
+                 sigma,      #Coefficient of relative risk aversion
+                 epsilon,    #Intratemporal elasticity of substitution
+                 psi,        #Service share in consumption
+                 phi,        #Strength of institutions
+                 upper_a,    #Upper bound of the grid for wealth (a)
+                 n_a,        #Number of inner nodes in the grid of wealth
+                 n_z,        #Number of inner nodes in the grid of entrepreneurial ideas
+                 p_grid      #Probability at q_p, the upper bound in the discretisation of the Pareto distribution      
+        """
         self.alpha, self.theta, self.kappa_s, self.kappa_m, self.delta, self.gamma, self.eta, \
         self.rho, self.sigma, self.epsilon, self.psi, self.phi = alpha, theta, kappa_s, kappa_m, delta, gamma, eta,\
         rho, sigma, epsilon, psi, phi
@@ -102,7 +123,7 @@ class Buera(object):
         Ls_demand =  Lds*is_services
         Lm_demand =  Ldm*is_manufacturing
         
-        
+        """
         #Checks if there are no individuals indifferent between sectors. Sets them to workers or services accordingly
         if np.sum(is_services*is_manufacturing) > 0:
             Km_demand[np.where(is_services*is_manufacturing==1)] =0
@@ -115,7 +136,7 @@ class Buera(object):
         if np.sum(is_manufacturing*is_labour) > 0:
                 Km_demand[np.where(is_manufacturing*is_labour)==1] = 0
                 Lm_demand[np.where(is_manufacturing*is_labour)==1] = 0
-    
+        """
         return[MS, L_supply, Ks_demand, Km_demand, Ls_demand, Lm_demand]
         
     #Solves model using up-wind method 
@@ -188,7 +209,6 @@ class Buera(object):
             
             err = np.amax(np.abs(v1-v))
             v = v1
-            print(err)
             if err < tol:
                 S = ssf*is_forward + ssb*is_backward
                 break
@@ -196,6 +216,7 @@ class Buera(object):
         return  [S, cm.reshape(self.dimS), cs.reshape(self.dimS), v, A]
     
     #Computes stationary distribution for solution using given matrix A from upwind method
+    #This step follows Ahn and Moll's method closely
     def statdist_upwind(self,A):
         A_prime = A.transpose().tocsr()
         b = np.zeros((self.dimS,1))
@@ -210,25 +231,32 @@ class Buera(object):
     #Computes excess demand in labour, asset and service (non-tradable) markets
     def excess_demand(self, r, w, ps, tol = 1e-3, maxiter = 200, step = 1000):
         MS, L_supply, Ks_demand, Km_demand, Ls_demand, Lm_demand = self.occup_choice(r, w, ps)
-        Mreshape = np.reshape(MS, (len(self.Zm), len(self.grida)), order = 'C' )
         S, cm, cs, v, A = self.solveupwind(MS, r, w, ps, tol = tol, maxiter = maxiter, step = step)
         distribution = self.statdist_upwind(A)
-        excess = np.array([np.sum((Ls_demand+Lm_demand-L_supply)*distribution),\
-                          np.sum((Ks_demand+Km_demand - self.SA)*distribution),\
-                          np.sum((cs - self.SZs*self.f(Ks_demand, Ls_demand) - self.kappa_s*(Ks_demand > 0))*distribution)])
-        return excess       
-
-    #solves model given grids for r, ps and w. Evaluates excess demand at grid and uses spline to smooth excess demand.
-    def solve_perfect(self, guess, gridr, gridps, gridw, tol = 1e-3, maxiter = 200, step = 1000):
-        excess_l = np.empty((len(gridr), len(gridps), len(gridw)))
-        excess_k = np.empty((len(gridr), len(gridps), len(gridw)))
-        excess_s = np.empty((len(gridr), len(gridps), len(gridw)))
-        for i, r in enumerate(gridr):
-            for j, ps in enumerate(gridps):
-                for k, w in enumerate(gridw):
-                    excess_l[i,j,k], excess_k[i,j,k], excess_s[i,j,k] = self.excess_demand(r, w, ps, tol, maxiter, step)
+        excess = np.array([np.sum((Ks_demand+Km_demand - self.SA)*distribution),\
+                           np.sum((Ls_demand+Lm_demand-L_supply)*distribution),\
+                           np.sum((cs - self.SZs*self.f(Ks_demand, Ls_demand) - self.kappa_s*(Ks_demand > 0))*distribution)])
+        return excess
     
-    
+    """
+    Given an initial guess (r,w,ps), solves the model using a tâtonnement-based approach: updates prices according to 
+    excess demand until ||excess_demand||_max <tol_tot or rep_tot reached
+    """
+    def solve_model(self, guess, step_tot = np.array((1e-5,1e-2,1e-2)), rep_tot = 200, tol_tot = 1e-3, tol = 1e-3, maxiter = 1000, step = 1000):
+        for i in range(rep_tot):
+            excess = self.excess_demand(guess[0], guess[1], guess[2], tol = tol, maxiter = maxiter, step=step)
+            print('Iteration:', i)
+            print('Excess demand in asset, labour and services markets: ', excess)
+            if np.max(np.abs(excess))< tol_tot:
+                break
+            else:
+                guess += step_tot*(excess>0) - step_tot*(excess<0)
+        return(guess)
+            
+        
+        
+        
+       
 
 
         
